@@ -1,0 +1,7 @@
+# Install dependencies with Pip.
+puts-cmd "pipenv install --system"
+
+/app/.heroku/python/bin/pipenv install --system
+
+puts-cmd "Checking requirements..."
+/app/.heroku/python/bin/pipenv check
