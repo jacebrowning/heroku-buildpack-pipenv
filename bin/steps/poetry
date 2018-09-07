@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+
+# export CLINT_FORCE_COLOR=1
+# export POETRY_FORCE_COLOR=1
+# shellcheck source=bin/utils
+source "$BIN_DIR/utils"
+set -e
+
+if [[ -f pyproject.lock ]]; then
+    if [[ -f .heroku/python/pyproject.lock.sha256 ]]; then
+        if [[ $(openssl dgst -sha256 pyproject.lock) == $(cat .heroku/python/pyproject.lock.sha256) ]]; then
+            # Measure that we're using Poetry
+            mcount "tool.poetry"
+
+            # Don't skip installation of there are git deps
+            if ! grep -q 'git' pyproject.lock; then
+                echo "Skipping installation, as pyproject.lock hasn't changed since last deploy." | indent
+
+                mcount "tool.poetry"
+                export SKIP_POETRY_INSTALL=1
+                export SKIP_PIP_INSTALL=1
+            fi
+
+        fi
+    fi
+fi
+
+
+if [ ! "$SKIP_POETRY_INSTALL" ]; then
+    # Poetry support (Generate requriements.txt with Poetry)
+    if [[ -f pyproject.toml ]]; then
+        # Measure that we're using Poetry
+        mcount "tool.poetry"
+
+        # Skip pip install, later
+        export SKIP_PIP_INSTALL=1
+
+        # Set PIP_EXTRA_INDEX_URL
+        if [[ -r $ENV_DIR/PIP_EXTRA_INDEX_URL ]]; then
+            PIP_EXTRA_INDEX_URL="$(cat "$ENV_DIR/PIP_EXTRA_INDEX_URL")"
+            export PIP_EXTRA_INDEX_URL
+        fi
+
+        export POETRY_VERSION="0.11.5"
+
+        # Install poetry
+        /app/.heroku/python/bin/pip install poetry==$POETRY_VERSION --upgrade &> /dev/null
+
+        # Install the dependencies
+        if [[ ! -f pyproject.lock ]]; then
+            puts-step "Installing dependencies with Poetry $POETRY_VERSION…"
+            /app/.heroku/python/bin/poetry settings.virtualenvs.create false 2>&1 | indent
+            /app/.heroku/python/bin/poetry install --no-dev 2>&1 | indent
+        else
+            poetry run pip freeze > requirements.txt
+            "$BIN_DIR/steps/pip-uninstall"
+            cp requirements.txt .heroku/python/requirements-declared.txt
+            openssl dgst -sha256 pyproject.lock > .heroku/python/pyproject.lock.sha256
+
+            puts-step "Installing dependencies with Poetry $POETRY_VERSION…"
+            /app/.heroku/python/bin/poetry settings.virtualenvs.create false 2>&1 | indent
+            /app/.heroku/python/bin/poetry install --no-dev 2>&1 | indent
+        fi
+
+        # Install the test dependencies, for CI
+        if [ "$INSTALL_TEST" ]; then
+            puts-step "Installing test dependencies…"
+            /app/.heroku/python/bin/poetry settings.virtualenvs.create false 2>&1 | indent
+            /app/.heroku/python/bin/poetry install 2>&1 | cleanup | indent
+        fi
+    fi
+else
+    export SKIP_PIP_INSTALL=1
+    poetry run pip freeze > requirements.txt
+fi
